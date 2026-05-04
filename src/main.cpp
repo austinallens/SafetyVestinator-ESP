@@ -8,6 +8,8 @@
 #include <BLEServer.h>
 #include <BLEUtils.h>
 #include <BLE2902.h>
+/* Required for GPS Integration */
+#include <TinyGPSPlus.h>
 
 /* ----- Sensor / Alert Config ----- */
 #define LOOP_DELAY_MS 100
@@ -22,6 +24,14 @@ const float HIGH_TEMP_F = 140.0f;
 #define SERVICE_UUID "12345678-1234-5678-1234-56789abcdef0"
 #define SENSOR_CHAR_UUID "12345678-1234-5678-1234-56789abcdef1"
 #define IMPACT_CHAR_UUID "12345678-1234-5678-1234-56789abcdef2"
+
+/* ----- GPS Config ----- */
+#define GPS_CHAR_UUID "12345678-1234-5678-1234-56789abcdef3"
+#define GPS_RX_PIN 16 // ESP32 GPIO that recieves GPS TX
+#define GPS_TX_PIN 17 // ESP32 GPIO that transmits to GPS RX (often unused)
+
+BLECharacteristic* gpsChar = nullptr;
+TinyGPSPlus gps;
 
 /* ----- Globals ------ */
 Adafruit_MPU6050 mpu;
@@ -83,6 +93,11 @@ void setup() {
     BLECharacteristic::PROPERTY_NOTIFY);
   impactChar->addDescriptor(new BLE2902());
 
+  gpsChar = service->createCharacteristic(
+    GPS_CHAR_UUID,
+    BLECharacteristic::PROPERTY_NOTIFY);
+  gpsChar->addDescriptor(new BLE2902());
+
   service->start();
 
   BLEAdvertising* advertising = server->getAdvertising();
@@ -90,10 +105,36 @@ void setup() {
   advertising->setScanResponse(true);
   advertising->start();
   Serial.println("BLE Advertising Started!");
+
+  // GPS
+  Serial2.begin(9600, SERIAL_8N1, GPS_RX_PIN, GPS_TX_PIN);
+  Serial.println("GPS UART started");
 }
 
 void loop() {
   sensors_event_t a, g, temp;
+
+  // Drain any pending GPS bytes
+  while (Serial2.available() > 0) {
+    gps.encode(Serial2.read());
+  }
+
+  // If we have a fresh fix, push it over BLE
+  if (deviceConnected && gps.location.isUpdated() && gps.location.isValid()) {
+    double lat = gps.location.lat();
+    double lng = gps.location.lng();
+
+    float payload[2] = { (float)lat, (float)lng };
+
+    gpsChar->setValue((uint8_t*)payload, sizeof(payload));
+    gpsChar->notify();
+
+    Serial.print("GPS: ");
+    Serial.print(lat, 6);
+    Serial.print(", ");
+    Serial.println(lng, 6);
+  }
+
   mpu.getEvent(&a, &g, &temp);
 
   float ax = a.acceleration.x;
