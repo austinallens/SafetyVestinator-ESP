@@ -11,6 +11,9 @@
 /* Required for GPS Integration */
 #include <TinyGPSPlus.h>
 
+// Function Prototyping
+float readThermistorTempF();
+
 /* ----- Sensor / Alert Config ----- */
 #define LOOP_DELAY_MS 100
 #define ALERT_FREQ_HZ 2000
@@ -28,10 +31,17 @@ const float HIGH_TEMP_F = 140.0f;
 /* ----- GPS Config ----- */
 #define GPS_CHAR_UUID "12345678-1234-5678-1234-56789abcdef3"
 #define GPS_RX_PIN 16 // ESP32 GPIO that recieves GPS TX
-#define GPS_TX_PIN 17 // ESP32 GPIO that transmits to GPS RX (often unused)
+#define GPS_TX_PIN 17 // ESP32 GPIO that transmits to GPS RX
 
 BLECharacteristic* gpsChar = nullptr;
 TinyGPSPlus gps;
+
+/* ----- Thermistor ----- */
+#define THERMISTOR_PIN 34
+const float R_FIXED = 10000.0f;
+const float R_NOMINAL = 6000.0f;
+const float B_COEFFICIENT = 3950.0f;
+
 
 /* ----- Globals ------ */
 Adafruit_MPU6050 mpu;
@@ -71,8 +81,8 @@ void setup() {
       delay(1000);
     }
   }
-  mpu.setAccelerometerRange(MPU6050_RANGE_8_G);
-  mpu.setGyroRange(MPU6050_RANGE_500_DEG);
+  mpu.setAccelerometerRange(MPU6050_RANGE_8_G); // Set at 8G to allow proper resolution
+  mpu.setGyroRange(MPU6050_RANGE_500_DEG); // Set at 500 deg/s to allow proper rotation tracking
   mpu.setFilterBandwidth(MPU6050_BAND_21_HZ);
   Serial.println("MPU6050 Ready!");
 
@@ -109,7 +119,11 @@ void setup() {
   // GPS
   Serial2.begin(9600, SERIAL_8N1, GPS_RX_PIN, GPS_TX_PIN);
   Serial.println("GPS UART started");
-}
+
+  // Thermistor
+  analogReadResolution(12);  // 12-bit ADC (0-4095)
+  analogSetAttenuation(ADC_11db);  // allows reading up to ~3.3V
+} 
 
 void loop() {
   sensors_event_t a, g, temp;
@@ -174,7 +188,7 @@ void loop() {
   Serial.print(", Z: " + String(g.gyro.z));
   Serial.println(" rad/s");
 
-  float tempF = (temp.temperature * 9.0f / 5.0f) + 32.0f;
+  float tempF = readThermistorTempF();
 
   Serial.print("Temperature: " + String(tempF));
   Serial.println(" degF");
@@ -202,4 +216,15 @@ void loop() {
 
   Serial.println("");
   delay(LOOP_DELAY_MS);
+}
+
+float readThermistorTempF(){
+  int adc = analogRead(THERMISTOR_PIN);
+  float resistance = R_FIXED / (4095.0f / adc - 1.0f);
+  float steinhart = log(resistance / R_NOMINAL) / B_COEFFICIENT
+    + 1.0f / (25.0f + 273.15f);
+  
+  float tempC = 1.0f / steinhart - 273.15f;
+  
+  return tempC * 9.0f / 5.0f + 32.0f;
 }
